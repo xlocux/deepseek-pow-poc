@@ -1,0 +1,17 @@
+{
+  "name": "deepseek-pow-poc",
+  "version": "1.0.0",
+  "description": "Dependency-free POC + docs for the chat.deepseek.com DeepSeekHashV1 proof-of-work (how it protects endpoints and how to solve it).",
+  "type": "commonjs",
+  "main": "pow.js",
+  "scripts": {
+    "start": "node demo.js",
+    "demo": "node demo.js",
+    "client": "node deepseek-client.example.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["deepseek", "proof-of-work", "pow", "DeepSeekHashV1", "reverse-engineering", "poc"],
+  "license": "MIT"
+}
