@@ -65,6 +65,48 @@ async function evaluate(client, expression) {
   return r?.result?.value;
 }
 
+// --- Robust token extraction ------------------------------------------------
+// DeepSeek has stored the token under different shapes over time: a plain string in
+// localStorage.userToken, a JSON wrapper like {"value":"…"} (redux-persist), or inside another key.
+// We dump all of localStorage (+ cookies) and match it broadly instead of one fixed key.
+const looksLikeJwt = (s) => /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s);
+const firstJwt = (s) => (typeof s === "string" ? (s.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/) || [""])[0] : "");
+
+function tokenFromValue(value, keyedAsToken) {
+  if (typeof value !== "string" || !value) return "";
+  const s = value.trim();
+  if (looksLikeJwt(s)) return s;
+  if (s.startsWith("{") || s.startsWith("[")) {
+    try {
+      const o = JSON.parse(s);
+      const cand = o?.value ?? o?.token ?? o?.access_token ?? o?.value?.token ?? o?.data?.token;
+      if (typeof cand === "string" && (looksLikeJwt(cand) || (keyedAsToken && cand.length > 20))) return cand.trim();
+    } catch { /* not JSON */ }
+  }
+  if (keyedAsToken && s.length > 20 && !/\s/.test(s)) return s;
+  return firstJwt(s);
+}
+
+function extractToken(localStore, cookie) {
+  const entries = Object.entries(localStore || {});
+  if (localStore.userToken) { const t = tokenFromValue(localStore.userToken, true); if (t) return t; }
+  for (const [k, v] of entries) { if (/token/i.test(k)) { const t = tokenFromValue(v, true); if (t) return t; } }
+  for (const [, v] of entries) { const t = tokenFromValue(v, false); if (t) return t; }
+  if (typeof cookie === "string" && cookie) {
+    const m = cookie.match(/(?:userToken|token)=([^;]+)/i);
+    if (m) { const t = tokenFromValue(decodeURIComponent(m[1]), true); if (t) return t; }
+    const j = firstJwt(cookie); if (j) return j;
+  }
+  return "";
+}
+
+async function readToken(client) {
+  const json = await evaluate(client, "(function(){try{var ls={};for(var i=0;i<localStorage.length;i++){var k=localStorage.key(i);ls[k]=localStorage.getItem(k);}return JSON.stringify({ls:ls,cookie:document.cookie});}catch(e){return JSON.stringify({ls:{},cookie:''});}})()");
+  let dump = { ls: {}, cookie: "" };
+  try { dump = JSON.parse(String(json || "{}")); } catch { /* keep default */ }
+  return extractToken(dump.ls, dump.cookie);
+}
+
 async function refreshWasm(jsUrls) {
   for (const url of jsUrls) {
     try {
@@ -83,7 +125,22 @@ async function main() {
   const browser = findBrowser();
   if (!browser) { console.error("No Chrome/Edge/Brave found."); process.exit(1); }
   fs.mkdirSync(PROFILE, { recursive: true });
-  const child = spawn(browser, [`--remote-debugging-port=${PORT}`, `--user-data-dir=${PROFILE}`, "--new-window", "https://chat.deepseek.com/"], { stdio: "ignore" });
+  const args = [
+    `--remote-debugging-port=${PORT}`,
+    `--user-data-dir=${PROFILE}`,
+    "--remote-allow-origins=*",      // Chrome 111+ rejects CDP websockets without this
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-session-crashed-bubble",
+    "--hide-crash-restore-bubble",
+    "--new-window",
+    "https://chat.deepseek.com/"
+  ];
+  const child = spawn(browser, args, { stdio: "ignore" });
+  child.on("exit", (code) => {
+    // A window that flashes open and shuts usually means another Chrome/Edge is holding this profile.
+    if (code !== null && code !== 0) console.error(`\n⚠️  Browser exited (code ${code}). If a window flashed and closed, close any Chrome/Edge using .ds_profile and retry.`);
+  });
   console.log("Browser opened — log in to DeepSeek. Capturing token automatically...");
   let client;
   try {
@@ -97,7 +154,7 @@ async function main() {
     const deadline = Date.now() + TIMEOUT_MS;
     let token = "";
     while (Date.now() < deadline) {
-      token = String(await evaluate(client, "(()=>{try{return localStorage.getItem('userToken')||''}catch(e){return ''}})()") || "").trim();
+      token = await readToken(client);
       if (token) break;
       await sleep(2000);
     }
