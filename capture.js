@@ -13,6 +13,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const http = require("node:http");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 
 const PROFILE = path.join(__dirname, ".ds_profile");
@@ -76,12 +77,15 @@ function tokenFromValue(value, keyedAsToken) {
   if (typeof value !== "string" || !value) return "";
   const s = value.trim();
   if (looksLikeJwt(s)) return s;
+  // A JSON wrapper (redux-persist stores userToken as {"value":<token|null>,"__version":…}) is NEVER
+  // itself the token: return only its inner value, or "" when logged out (value:null).
   if (s.startsWith("{") || s.startsWith("[")) {
     try {
       const o = JSON.parse(s);
       const cand = o?.value ?? o?.token ?? o?.access_token ?? o?.value?.token ?? o?.data?.token;
-      if (typeof cand === "string" && (looksLikeJwt(cand) || (keyedAsToken && cand.length > 20))) return cand.trim();
+      if (typeof cand === "string" && cand.trim() && (looksLikeJwt(cand) || (keyedAsToken && cand.trim().length > 20))) return cand.trim();
     } catch { /* not JSON */ }
+    return "";
   }
   if (keyedAsToken && s.length > 20 && !/\s/.test(s)) return s;
   return firstJwt(s);
@@ -98,6 +102,34 @@ function extractToken(localStore, cookie) {
     const j = firstJwt(cookie); if (j) return j;
   }
   return "";
+}
+
+// Confirm the captured token is a REAL, usable session token by doing the first step of the chat
+// flow (POST /chat_session/create — needs auth, no PoW). "valid" = works; "invalid" = rejected;
+// "unknown" = couldn't tell (network/shape) — we still save but warn.
+async function validateToken(token, deviceId) {
+  try {
+    const res = await fetch("https://chat.deepseek.com/api/v0/chat_session/create", {
+      method: "POST",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+        "Origin": "https://chat.deepseek.com",
+        "Referer": "https://chat.deepseek.com/",
+        "x-client-platform": "web",
+        "x-client-version": "2.7.0",
+        "x-client-locale": "en_US",
+        "x-device-id": deviceId,
+        "x-device-model": ""
+      },
+      body: "{}"
+    });
+    if (res.status === 401 || res.status === 403) return "invalid";
+    const data = await res.json().catch(() => ({}));
+    return (data.code === 0 && data?.data?.biz_data?.chat_session?.id) ? "valid" : "unknown";
+  } catch { return "unknown"; }
 }
 
 async function readToken(client) {
@@ -151,17 +183,23 @@ async function main() {
     await client.ready;
     await client.send("Runtime.enable");
 
+    const deviceId = crypto.randomUUID();
     const deadline = Date.now() + TIMEOUT_MS;
     let token = "";
+    let verdict = "unknown";
     while (Date.now() < deadline) {
-      token = await readToken(client);
-      if (token) break;
+      const candidate = await readToken(client);
+      if (candidate) {
+        verdict = await validateToken(candidate, deviceId);
+        if (verdict !== "invalid") { token = candidate; break; } // valid, or unverifiable network-wise
+      }
       await sleep(2000);
     }
-    if (!token) { console.error("Timed out waiting for login."); process.exit(1); }
+    if (!token) { console.error("Timed out waiting for a real login (no valid token seen)."); process.exit(1); }
 
     fs.writeFileSync(TOKEN_FILE, token, "utf8");
     console.log("\n✅ Token captured and saved to .ds_token");
+    console.log(verdict === "valid" ? "   verified against DeepSeek — the session works." : "   (could not verify live right now; saved anyway)");
     console.log("   export DS_TOKEN=\"" + token.slice(0, 6) + "…\"  (full value in .ds_token)");
 
     // Opportunistic wasm refresh using the live page's own script URLs (bypasses the 403 on HTML).

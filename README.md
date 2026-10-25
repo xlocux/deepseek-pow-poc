@@ -78,7 +78,7 @@ See [`pow.js`](./pow.js) for the solver and [`demo.js`](./demo.js) for the self-
 |---|---|
 | `pow.js` | The solver: `solveChallenge`, `powResponseHeader`, `deepseekHashV1` (zero deps). |
 | `demo.js` | Self-test against a real captured challenge → verifies answer `47450`. |
-| `capture.js` | Opens a real browser, you log in once, auto-captures your `userToken` **and** refreshes the wasm. |
+| `capture.js` | Opens a real browser, you log in once, auto-captures the session token (scans all of localStorage + cookies, unwraps the redux-persist `{"value":…}` shape), **verifies it works against DeepSeek before saving**, and refreshes the wasm. |
 | `deepseek-client.example.js` | Minimal reference client: challenge → PoW → chat completion (SSE). |
 | `update-wasm.js` | Best-effort headless refresh of the wasm (falls back to `capture.js` when the site 403s). |
 | `sha3_wasm_bg.wasm` | DeepSeek's custom-hash wasm, used as the hash oracle. |
