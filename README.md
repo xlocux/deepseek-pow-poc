@@ -78,15 +78,34 @@ See [`pow.js`](./pow.js) for the solver and [`demo.js`](./demo.js) for the self-
 |---|---|
 | `pow.js` | The solver: `solveChallenge`, `powResponseHeader`, `deepseekHashV1` (zero deps). |
 | `demo.js` | Self-test against a real captured challenge → verifies answer `47450`. |
+| `capture.js` | Opens a real browser, you log in once, auto-captures your `userToken` **and** refreshes the wasm. |
 | `deepseek-client.example.js` | Minimal reference client: challenge → PoW → chat completion (SSE). |
+| `update-wasm.js` | Best-effort headless refresh of the wasm (falls back to `capture.js` when the site 403s). |
 | `sha3_wasm_bg.wasm` | DeepSeek's custom-hash wasm, used as the hash oracle. |
 | `IMPLEMENTATION.md` | Step-by-step guide to wire this into your own JS project. |
 
 ## Run
 
 ```bash
-node demo.js
+node demo.js                 # verify the solver (no login needed)
+node capture.js              # log in once -> saves .ds_token and refreshes the wasm
+DS_TOKEN=$(cat .ds_token) node deepseek-client.example.js "Ciao!"
 ```
+
+## Keeping it working (auto-update)
+
+DeepSeek rotates `sha3_wasm_bg.<hash>.wasm` (and occasionally the algorithm) on updates. Instead of
+re-capturing by hand:
+
+- **`node capture.js`** — the reliable path. A real browser loads the (bot-protected) page, so it can
+  read the current chunk URLs; the script then downloads the fresh wasm from the CDN and saves your
+  token. Run it again whenever chat stops working.
+- **`node update-wasm.js`** — headless; discovers the wasm from the site's JS and validates it against
+  the known test vector. If DeepSeek has fronted the HTML with bot protection (HTTP 403) it tells you
+  to use `capture.js` instead.
+- The validator re-runs the **known test vector** after download: if it still matches, the algorithm
+  is unchanged and the solver is safe; if not, DeepSeek changed the hash/flow and you must re-verify
+  with a live challenge.
 
 ## Notes & ethics
 

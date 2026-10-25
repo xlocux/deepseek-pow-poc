@@ -4,3 +4,6 @@ node_modules/
 .env.*
 .DS_Store
 Thumbs.db
+# Captured session token and the dedicated browser profile (never commit these)
+.ds_token
+.ds_profile/

@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node demo.js",
     "demo": "node demo.js",
-    "client": "node deepseek-client.example.js"
+    "client": "node deepseek-client.example.js",
+    "capture": "node capture.js",
+    "update-wasm": "node update-wasm.js"
   },
   "engines": {
     "node": ">=18"
